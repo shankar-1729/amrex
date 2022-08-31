@@ -904,7 +904,7 @@ public:
     void FillBoundary (int scomp, int ncomp, const Periodicity& period, bool cross = false);
 
     template <typename BUF=value_type>
-    void FillBoundary (int scomp, int ncomp, const IntVect& nghost, const Periodicity& period, bool cross = false);
+    void FillBoundary (int scomp, int ncomp, const IntVect& nghost, const Periodicity& period, bool cross = false); //SWAPNIL: Called inside FillPatchSingleLevel with only first 4 parameters
 
     template <typename BUF=value_type>
     void FillBoundary_nowait (bool cross = false);
@@ -922,7 +922,7 @@ public:
     void FillBoundary_nowait (int scomp, int ncomp, const Periodicity& period, bool cross = false);
 
     template <typename BUF=value_type>
-    void FillBoundary_nowait (int scomp, int ncomp, const IntVect& nghost, const Periodicity& period, bool cross = false);
+    void FillBoundary_nowait (int scomp, int ncomp, const IntVect& nghost, const Periodicity& period, bool cross = false); //SWAPNIL: Called inside FillBoundary
 
     template <typename BUF=value_type,
               class F=FAB, typename std::enable_if<IsBaseFab<F>::value,int>::type = 0>
@@ -2645,6 +2645,8 @@ FabArray<FAB>::FillBoundary (int scomp, int ncomp, const Periodicity& period, bo
     }
 }
 
+
+//SWAPNIL: This one is called inside FillPatchSingleLevel
 template <class FAB>
 template <typename BUF>
 void

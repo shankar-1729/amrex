@@ -31,6 +31,104 @@ bool ProperlyNested (const IntVect& ratio, const IntVect& blocking_factor, int n
     return crse_box.contains(fine_box_coarsened);
 }
 
+//*******************************************************************************************
+//*****************   My version: take vector of MFs as input********************************
+//*******************************************************************************************
+
+//TODO: Need to pass {vector *mf}, {vector time}, {vector {vector smf}}, {vector {vector stime}}, {vector {vector scomp}}, {vector dcomp}, {vector ncomp}
+//dependent routine for FillPatchSingleLevel with vector
+template <typename MF, typename BC>
+std::enable_if_t<IsFabArray<MF>::value>
+FillPatchSingleLevel (amrex::Vector<MF*> const& vec_mf, amrex::Vector<Real>& vec_time,
+                      const amrex::Vector<amrex::Vector<MF*>>& vec_vec_smf,
+                      const Vector<Vector<Real>>& vec_vec_stime,
+                      amrex::Vector<int>& vec_scomp, amrex::Vector<int>& vec_dcomp, 
+                      amrex::Vector<int>& vec_ncomp,
+                      const amrex::Vector<Geometry>& vec_geom,
+                      amrex::Vector<BC>& vec_physbcf, const amrex::Vector<int>& vec_bcfcomp)
+{
+    //TODO: Passing just vec_mf[0].nGrowVect() to all for now
+    amrex::Vector<amrex::IntVect> vec_nghost;
+    for (int i = 0; i < vec_mf.size(); i++){
+        vec_nghost.push_back(vec_mf[i]->nGrowVect());
+    }
+       
+    FillPatchSingleLevel(vec_mf, vec_nghost , vec_time, vec_vec_smf, vec_vec_stime, vec_scomp, vec_dcomp, vec_ncomp, vec_geom, vec_physbcf, vec_bcfcomp);
+}
+
+/* 
+scomp = starting component of source
+dcomp = starting component of destination
+ncomp = number of components
+smf = vector of source mfs (size 1 means no time interpolation, size 2 means do time interpolation)
+*/
+//main routine for FillPatchSingleLevel with vector
+//If source MF (smf) and destination MF (mf) are same, this will do FillBoundary i.e sync ghost zones.
+//If source MF (smf) and destination MF (mf) are different, this will do ParallelCopy i.e copy source MF to destination MF.
+template <typename MF, typename BC>
+std::enable_if_t<IsFabArray<MF>::value>
+FillPatchSingleLevel (amrex::Vector<MF*> const& vec_mf, amrex::Vector<amrex::IntVect>& vec_nghost, 
+                      amrex::Vector<Real>& vec_time,
+                      const amrex::Vector<amrex::Vector<MF*>>& vec_vec_smf, 
+                      const Vector<Vector<Real>>& vec_vec_stime,
+                      amrex::Vector<int>& vec_scomp, amrex::Vector<int>& vec_dcomp, 
+                      amrex::Vector<int>& vec_ncomp,
+                      const amrex::Vector<Geometry>& vec_geom,
+                      amrex::Vector<BC>& vec_physbcf, const amrex::Vector<int>& vec_bcfcomp)
+{   
+    
+    BL_PROFILE("FillPatchSingleLevel_vec");
+    const int size_vec_mf = vec_mf.size();//size of Vector of MFs
+    
+    for (int i = 0; i < size_vec_mf; i++){
+        AMREX_ASSERT(vec_scomp[i]+vec_ncomp[i] <= vec_vec_smf[i][0]->nComp());
+        AMREX_ASSERT(vec_dcomp[i]+vec_ncomp[i] <= vec_mf[i]->nComp());
+        AMREX_ASSERT(vec_vec_smf[i]->size() == vec_vec_stime->size());
+        AMREX_ASSERT(vec_vec_smf[i]->size() != 0);
+        AMREX_ASSERT(vec_nghost[i]->allLE(vec_mf[i]->nGrowVect()));
+    }
+    
+    bool size_of_each_vec_smf_is_one = true;
+    for (int i = 0; i < size_vec_mf; i++){
+        if (vec_vec_smf[i].size() != 1) size_of_each_vec_smf_is_one = false;
+    }
+    
+    if (size_of_each_vec_smf_is_one) {    
+        //If I want to run in parallel, then have to add _wait() and _finish() here itself.
+        //ParallelCopy has similar approach as in FillBoundary
+        
+        //Call FillBoundary_nowait or ParallelCopy_nowait for each MF depending on the condition          
+        for (int i = 0; i < size_vec_mf; i++){
+            if (vec_mf[i] == vec_vec_smf[i][0] && vec_scomp[i] == vec_dcomp[i]) {
+                vec_mf[i]->FillBoundary_nowait(vec_dcomp[i], vec_ncomp[i], vec_nghost[i], vec_geom[i].periodicity());
+            } else {
+                vec_mf[i]->ParallelCopy_nowait(*vec_vec_smf[i][0], vec_scomp[i], vec_dcomp[i], vec_ncomp[i], IntVect{0}, vec_nghost[i], vec_geom[i].periodicity());
+            }     
+        }
+            
+        //Call FillBoundary_finish() or ParallelCopy_finish() for each MF depending on the condition
+        for (int i = 0; i < size_vec_mf; i++){
+            if (vec_mf[i] == vec_vec_smf[i][0] && vec_scomp[i] == vec_dcomp[i]) {
+                vec_mf[i]->FillBoundary_finish();
+            } else {
+                vec_mf[i]->ParallelCopy_finish();
+            }     
+        }
+    
+    } else {
+        amrex::Abort("FillPatchSingleLevel: high-order interpolation in time not implemented yet/ Method not known");       
+    }
+
+    for (int i = 0; i < size_vec_mf; i++){
+        //physbcf(mf, dcomp, ncomp, nghost, time, bcfcomp);
+        vec_physbcf[i](*vec_mf[i], vec_dcomp[i], vec_ncomp[i], vec_nghost[i], vec_time[i], vec_bcfcomp[i]);       
+    }
+}
+//*******************************************************************************************
+//*******************************************************************************************
+//*******************************************************************************************
+
+
 template <typename MF, typename BC>
 std::enable_if_t<IsFabArray<MF>::value>
 FillPatchSingleLevel (MF& mf, Real time,
@@ -43,6 +141,7 @@ FillPatchSingleLevel (MF& mf, Real time,
                          geom, physbcf, bcfcomp);
 }
 
+/*****************   MAIN **************************************************/
 template <typename MF, typename BC>
 std::enable_if_t<IsFabArray<MF>::value>
 FillPatchSingleLevel (MF& mf, IntVect const& nghost, Real time,
@@ -58,13 +157,29 @@ FillPatchSingleLevel (MF& mf, IntVect const& nghost, Real time,
     AMREX_ASSERT(smf.size() == stime.size());
     AMREX_ASSERT(smf.size() != 0);
     AMREX_ASSERT(nghost.allLE(mf.nGrowVect()));
-
+    
+    //SWAPNIL: From what I understand, this does time interpolation when smf size is 2, 
+    //otherwise no time interpolation.
     if (smf.size() == 1)
     {
+        //For size=1, if mf==smf, call FillBoundary. Else call ParallelCopy.
         if (&mf == smf[0] && scomp == dcomp) {
-            mf.FillBoundary(dcomp, ncomp, nghost, geom.periodicity());
+            //mf.FillBoundary(dcomp, ncomp, nghost, geom.periodicity());
+            
+            //If I want to run in parallel, then have to add _wait() and _finish() here itself.
+            mf.FillBoundary_nowait(dcomp, ncomp, nghost, geom.periodicity()); 
+            mf.FillBoundary_finish();
+            
+            //TODO: Call mf[i].FillBoundary_nowait() AND mf[i].FillBoundary_finish() for the input vector of MFs
+            
         } else {
-            mf.ParallelCopy(*smf[0], scomp, dcomp, ncomp, IntVect{0}, nghost, geom.periodicity());
+            //mf.ParallelCopy(*smf[0], scomp, dcomp, ncomp, IntVect{0}, nghost, geom.periodicity());
+            
+            //If I want to run in parallel, then have to add _wait() and _finish() here itself.
+            mf.ParallelCopy_nowait(*smf[0], scomp, dcomp, ncomp, IntVect{0}, nghost, geom.periodicity());
+            mf.ParallelCopy_finish();
+            
+            //TODO: Call mf[i].ParallelCopy_nowait() AND mf[i].ParallelCopy_finish() for the input vector of MFs
         }
     }
     else if (smf.size() == 2)
@@ -412,7 +527,185 @@ namespace {
     {
         // nothing
     }
+    
+    
+    
+    //-----------------------------------------------------------------------------------------------
+    //-------------------------------- MY VERSION (VEC OF INPUTS) -----------------------------------
+    //-----------------------------------------------------------------------------------------------
+    //cmf = coarse MF, fmf = fine MF, mf = destination MF
+    //TODO: Add const wherever appropriate
+    template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
+    std::enable_if_t<IsFabArray<MF>::value>
+    FillPatchTwoLevels_doit (amrex::Vector<MF*>& vec_mf, amrex::Vector<amrex::IntVect>& vec_nghost, 
+                             amrex::Vector<Real>& vec_time,
+                             const amrex::Vector<amrex::Vector<MF*>>& vec_vec_cmf,
+                             const Vector<Vector<Real>>& vec_vec_ct,
+                             const amrex::Vector<amrex::Vector<MF*>>& vec_vec_fmf,
+                             const Vector<Vector<Real>>& vec_vec_ft,
+                             amrex::Vector<int>& vec_scomp, amrex::Vector<int>& vec_dcomp, //TODO: Add const
+                             amrex::Vector<int>& vec_ncomp,
+                             const amrex::Vector<Geometry>& vec_cgeom,
+                             const amrex::Vector<Geometry>& vec_fgeom,
+                             amrex::Vector<BC>& vec_cbc, amrex::Vector<int>& vec_cbccomp,
+                             amrex::Vector<BC>& vec_fbc, amrex::Vector<int>& vec_fbccomp,
+                             const amrex::Vector<IntVect>& vec_ratio,
+                             amrex::Vector<Interp*>& vec_mapper,
+                             const amrex::Vector<amrex::Vector<BCRec>>& vec_vec_bcs,
+                             amrex::Vector<int>& vec_bcscomp,
+                             const amrex::Vector<PreInterpHook>& vec_pre_interp,
+                             const amrex::Vector<PostInterpHook>& vec_post_interp,
+                             EB2::IndexSpace const* index_space)
+    {
+      BL_PROFILE("FillPatchTwoLevels_vec");
+        
+      const int size_vec_mf = vec_mf.size();//size of Vector of MFs
+        
+      //for (int i = 0; i < size_vec_mf; i++){
+        
+        //TODO: Replace 1 with i. Think of logic to use here for all the mfs in vec_mf.
+        //All mfs need to perform the same operation. Or I can make a separation by creating two/more groups by selecting from existing vec_mf. Each group will either follow  vec_nghost[1].max() (>,<) 0, vec_mf[1]->getBDKey() (!=, ==) vec_vec_fmf[1][0]->getBDKey()) etc. Execute each group in parallel independently.
+        
+        if (vec_nghost[1].max() > 0 || vec_mf[1]->getBDKey() != vec_vec_fmf[1][0]->getBDKey())
+        {
+            
+            amrex::Vector<InterpolaterBoxCoarsener> vec_coarsener;
+            for (int i = 0; i < size_vec_mf; i++){
+                vec_coarsener.push_back(vec_mapper[i]->BoxCoarsener(vec_ratio[i]));
+            }
+            
+            bool one_or_more_mf_is_face_centered = false;
+            for (int i = 0; i < size_vec_mf; i++){
+                if ( AMREX_D_TERM( 
+                     vec_mf[i]->ixType().nodeCentered(0), 
+                     + vec_mf[i]->ixType().nodeCentered(1),
+                     + vec_mf[i]->ixType().nodeCentered(2) ) == 1 ){
+                        one_or_more_mf_is_face_centered = true;
+                     }
+            }    
 
+            // Test for Face-centered data
+            if (one_or_more_mf_is_face_centered)
+            {
+                amrex::Abort("FillPatchTwoLevels_vec has not yet implemented a version for face-based data");               
+            }
+            else
+            {
+                
+                //TODO: TheFPinfo can be modified to take input as vectors and output a vec_fpc directly?
+                amrex::Vector<FabArrayBase::FPinfo const*> vec_fpc;
+                
+                for (int i = 0; i < size_vec_mf; i++){
+                    vec_fpc.push_back( &FabArrayBase::TheFPinfo(*vec_vec_fmf[i][0], *vec_mf[i],
+                                                                          vec_nghost[i],
+                                                                          vec_coarsener[i],
+                                                                          vec_fgeom[i],
+                                                                          vec_cgeom[i],
+                                                                          index_space) 
+                                      );
+                }
+               
+                //For now, let's require that ALL the fpc's in vec_fpc satisfy this condition.
+                //IF not, call assert
+                //Later, can divide the existing fpc's into two groups, one that follow this and other that don't. Those that don't will not go through this, THose that do will execute this in parallel.
+                bool  all_fpc_ba_crse_patch_non_empty = true;
+                for (int i = 0; i < size_vec_mf; i++){
+                    if ( vec_fpc[i]->ba_crse_patch.empty()) all_fpc_ba_crse_patch_non_empty = false;
+                }
+                
+                bool  all_fpc_ba_crse_patch_empty = true;
+                for (int i = 0; i < size_vec_mf; i++){
+                    if ( ! vec_fpc[i]->ba_crse_patch.empty()) all_fpc_ba_crse_patch_empty = false;
+                }
+                
+                
+                //if ( ! fpc.ba_crse_patch.empty())
+                if (all_fpc_ba_crse_patch_non_empty){
+                
+                    //Need to do interpolation
+                    amrex::Vector<MF> vec_mf_crse_patch;
+                    for (int i = 0; i < size_vec_mf; i++){
+                        vec_mf_crse_patch.push_back( make_mf_crse_patch<MF>(*vec_fpc[i], vec_ncomp[i]) );
+                    }
+                    
+                    for (int i = 0; i < size_vec_mf; i++){
+                        mf_set_domain_bndry (vec_mf_crse_patch[i], vec_cgeom[i]);
+                    }
+                    
+                    //TODO: Call the vector version for parallel execution
+                    amrex::Vector<int> vec_dcomp_zero;
+                    for (int i = 0; i < size_vec_mf; i++){
+                        vec_dcomp_zero.push_back(0);
+                    }
+                    
+                    //TODO: Need to define new FillPatchSingleLevel for this input set
+                    FillPatchSingleLevel(amrex::GetVecOfPtrs(vec_mf_crse_patch), vec_time, vec_vec_cmf, vec_vec_ct, vec_scomp, 
+                                         vec_dcomp_zero, vec_ncomp, vec_cgeom, vec_cbc, vec_cbccomp);
+
+                    for (int i = 0; i < size_vec_mf; i++){
+                        MF mf_fine_patch = make_mf_fine_patch<MF>(*vec_fpc[i], vec_ncomp[i]);
+
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (Gpu::notInLaunchRegion())
+#endif              
+                        //This seems to be parallel already    
+                        for (MFIter mfi(vec_mf_crse_patch[i]); mfi.isValid(); ++mfi)
+                        {
+                            auto& sfab = vec_mf_crse_patch[i][mfi];
+                            const Box& sbx = sfab.box();
+                            vec_pre_interp[i](sfab, sbx, 0, vec_ncomp[i]);
+                        }
+                        //In space, local
+                        //TODO: Need to define new FillPatchSingleLevel for this input set
+                        /*FillPatchInterp(mf_fine_patch, 0, vec_mf_crse_patch[i], 0,
+                                        vec_ncomp[i], IntVect(0), vec_cgeom[i], vec_fgeom[i],
+                                        amrex::grow(amrex::convert(
+                                        vec_fgeom[i].Domain(),vec_mf[i]->ixType()),vec_nghost[i]),
+                                        vec_ratio[i], vec_mapper[i], vec_vec_bcs[i], vec_bcscomp[i]);*/
+
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (Gpu::notInLaunchRegion())
+#endif  
+                        //This seems to be parallel already    
+                        for (MFIter mfi(mf_fine_patch); mfi.isValid(); ++mfi)
+                        {
+                            auto& dfab = mf_fine_patch[mfi];
+                            const Box& dbx = dfab.box();
+                            vec_post_interp[i](dfab, dbx, 0, vec_ncomp[i]);
+                        }
+
+                        //TODO: Do _nowait and _finish here itself? YESSSS. To make things parallel.
+                        vec_mf[i]->ParallelCopy(mf_fine_patch, 0, vec_dcomp[i], vec_ncomp[i], IntVect{0}, vec_nghost[i]);
+                    }
+                                    
+                } else if (all_fpc_ba_crse_patch_empty){
+                
+                    //Nothing to do. Data already available. Just call FillPatchSingleLevel later.
+                    
+                } else {
+                
+                    amrex::Abort("FillPatchTwoLevels_vec: ALL fpc coarse patch should be empty, or ALL fpc coarse patch should be non-empty. Some empty and some not-empty together is not yet implemented.");
+                    
+                }
+                             
+            }//if (nghost.max() > 0 || mf->getBDKey() != fmf[0]->getBDKey())
+        }
+
+        
+        FillPatchSingleLevel(vec_mf, vec_nghost, vec_time, vec_vec_fmf, vec_vec_ft, vec_scomp, vec_dcomp, 
+                             vec_ncomp, vec_fgeom, vec_fbc, vec_fbccomp);
+      
+    }
+    //-----------------------------------------------------------------------------------------------
+    //-----------------------------------------------------------------------------------------------
+    //-----------------------------------------------------------------------------------------------
+
+
+
+    //****************************************************************************************
+    //****************   (USED IN CARPETX) ***************************************************
+    //****************************************************************************************
+    //cmf = coarse MF, fmf = fine MF, mf = destination MF
     template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
     std::enable_if_t<IsFabArray<MF>::value>
     FillPatchTwoLevels_doit (MF& mf, IntVect const& nghost, Real time,
@@ -547,7 +840,7 @@ namespace {
                         const Box& sbx = sfab.box();
                         pre_interp(sfab, sbx, 0, ncomp);
                     }
-
+                    //In space, local
                     FillPatchInterp(mf_fine_patch, 0, mf_crse_patch, 0,
                                     ncomp, IntVect(0), cgeom, fgeom,
                                     amrex::grow(amrex::convert(fgeom.Domain(),mf.ixType()),nghost),
@@ -571,6 +864,9 @@ namespace {
         FillPatchSingleLevel(mf, nghost, time, fmf, ft, scomp, dcomp, ncomp,
                              fgeom, fbc, fbccomp);
     }
+    //********************************************************************************************
+    //********************************************************************************************
+    //********************************************************************************************
 
     template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
     std::enable_if_t<IsFabArray<MF>::value>
@@ -769,6 +1065,53 @@ FillPatchTwoLevels (MF& mf, IntVect const& nghost, Real time,
                             pre_interp,post_interp,index_space);
 }
 
+//--------------------------------------------------------------------------------------------------
+//-------------------------   MY VERSION WITH VECTORS ----------------------------------------------
+//--------------------------------------------------------------------------------------------------
+//TODO: Add const wherever appropriate
+template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
+std::enable_if_t<IsFabArray<MF>::value>
+FillPatchTwoLevels (amrex::Vector<MF*>& vec_mf, amrex::Vector<Real>& vec_time,
+                    const amrex::Vector<amrex::Vector<MF*>>& vec_vec_cmf, 
+                    const Vector<Vector<Real>>& vec_vec_ct,
+                    const amrex::Vector<amrex::Vector<MF*>>& vec_vec_fmf,
+                    const Vector<Vector<Real>>& vec_vec_ft,
+                    amrex::Vector<int>& vec_scomp, amrex::Vector<int>& vec_dcomp, 
+                    amrex::Vector<int>& vec_ncomp,
+                    const amrex::Vector<Geometry>& vec_cgeom,
+                    const amrex::Vector<Geometry>& vec_fgeom,
+                    amrex::Vector<BC>& vec_cbc, amrex::Vector<int>& vec_cbccomp,
+                    amrex::Vector<BC>& vec_fbc, amrex::Vector<int>& vec_fbccomp,
+                    const amrex::Vector<IntVect>& vec_ratio,
+                    amrex::Vector<Interp*>& vec_mapper,                           
+                    const amrex::Vector<amrex::Vector<BCRec>>& vec_vec_bcs,
+                    amrex::Vector<int>& vec_bcscomp,
+                    const amrex::Vector<PreInterpHook>& vec_pre_interp,
+                    const amrex::Vector<PostInterpHook>& vec_post_interp)
+{
+#ifdef AMREX_USE_EB
+    EB2::IndexSpace const* index_space = EB2::TopIndexSpaceIfPresent();
+#else
+    EB2::IndexSpace const* index_space = nullptr;
+#endif
+    
+    amrex::Vector<amrex::IntVect> vec_nghost;
+    for (int i = 0; i < vec_mf.size(); i++){
+        vec_nghost.push_back(vec_mf[i]->nGrowVect());
+    }
+
+    FillPatchTwoLevels_doit(vec_mf,vec_nghost,vec_time,vec_vec_cmf,vec_vec_ct,vec_vec_fmf,vec_vec_ft,
+                            vec_scomp,vec_dcomp,vec_ncomp,vec_cgeom,vec_fgeom,
+                            vec_cbc,vec_cbccomp,vec_fbc,vec_fbccomp,vec_ratio,vec_mapper,vec_vec_bcs,vec_bcscomp,
+                            vec_pre_interp,vec_post_interp,index_space);
+}
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+
+//*****************************************************************************************
+//****************   (USED IN CARPETX) ****************************************************
+//*****************************************************************************************
 template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
 std::enable_if_t<IsFabArray<MF>::value>
 FillPatchTwoLevels (MF& mf, Real time,
@@ -795,6 +1138,10 @@ FillPatchTwoLevels (MF& mf, Real time,
                             cbc,cbccomp,fbc,fbccomp,ratio,mapper,bcs,bcscomp,
                             pre_interp,post_interp,index_space);
 }
+//****************************************************************************
+//****************************************************************************
+//****************************************************************************
+
 
 template <typename MF, typename BC, typename Interp, typename PreInterpHook, typename PostInterpHook>
 std::enable_if_t<IsFabArray<MF>::value>

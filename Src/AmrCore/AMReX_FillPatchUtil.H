@@ -40,22 +40,53 @@ namespace amrex
     bool ProperlyNested (const IntVect& ratio, const IntVect& blocking_factor, int ngrow,
                          const IndexType& boxType, Interp* mapper);
 
+    
+    //SWAPNIL: This is the main function for FillPatchSingleLevel. 
+    //That's because this one is ultimately called by the next function later.
+    /*****************   MAIN **************************************************/
     template <typename MF, typename BC>
     std::enable_if_t<IsFabArray<MF>::value>
     FillPatchSingleLevel (MF& mf, IntVect const& nghost, Real time,
                           const Vector<MF*>& smf, const Vector<Real>& stime,
                           int scomp, int dcomp, int ncomp,
                           const Geometry& geom,
-                          BC& physbcf, int bcfcomp);
-
+                          BC& physbcf, int bcfcomp);  
+    /****************************************************************************/
+    
+    /*****************   DEPENDENT (USED IN CARPETX) **************************************************/
+    //No need to specify the vector of ghost-zones in this one, taken care of from mf ultimately
     template <typename MF, typename BC>
     std::enable_if_t<IsFabArray<MF>::value>
     FillPatchSingleLevel (MF& mf, Real time,
                           const Vector<MF*>& smf, const Vector<Real>& stime,
                           int scomp, int dcomp, int ncomp,
                           const Geometry& geom,
-                          BC& physbcf, int bcfcomp);
-
+                          BC& physbcf, int bcfcomp); //SWAPNIL: This is used in AmrCoreAdv.cpp
+    /****************************************************************************/
+     
+    //------------------------- My version: take vector of MFs as input ----------------------------
+    template <typename MF, typename BC>
+    std::enable_if_t<IsFabArray<MF>::value>
+    FillPatchSingleLevel (amrex::Vector<MF*> const& vec_mf, amrex::Vector<amrex::IntVect>& vec_nghost, 
+                          const amrex::Vector<Real>& vec_time,
+                          const amrex::Vector<amrex::Vector<MF*>>& vec_vec_smf, 
+                          const Vector<Vector<Real>>& vec_vec_stime, amrex::Vector<int>& vec_scomp, 
+                          const amrex::Vector<int>& vec_dcomp, const amrex::Vector<int>& vec_ncomp,
+                          const amrex::Vector<Geometry>& vec_geom,
+                          amrex::Vector<BC>& vec_physbcf, const amrex::Vector<int>& vec_bcfcomp);
+    
+    template <typename MF, typename BC>
+    std::enable_if_t<IsFabArray<MF>::value>
+    FillPatchSingleLevel (amrex::Vector<MF*>const& vec_mf, const amrex::Vector<Real>& vec_time,
+                          const amrex::Vector<amrex::Vector<MF*>>& vec_vec_smf, 
+                          const Vector<Vector<Real>>& vec_vec_stime,
+                          const amrex::Vector<int>& vec_scomp, const amrex::Vector<int>& vec_dcomp, 
+                          const amrex::Vector<int>& vec_ncomp,
+                          const amrex::Vector<Geometry>& vec_geom,
+                          amrex::Vector<BC>& vec_physbcf, const amrex::Vector<int>& vec_bcfcomp);
+    //------------------------------------------------------------------------------------------------
+    
+    
     template <typename MF, typename BC, typename Interp,
               typename PreInterpHook=NullInterpHook<typename MF::FABType::value_type>,
               typename PostInterpHook=NullInterpHook<typename MF::FABType::value_type> >
@@ -73,6 +104,7 @@ namespace amrex
                         const PreInterpHook& pre_interp = {},
                         const PostInterpHook& post_interp = {});
 
+    /*****************   (USED IN CARPETX) **************************************************/
     template <typename MF, typename BC, typename Interp,
               typename PreInterpHook=NullInterpHook<typename MF::FABType::value_type>,
               typename PostInterpHook=NullInterpHook<typename MF::FABType::value_type> >
@@ -89,7 +121,32 @@ namespace amrex
                         const Vector<BCRec>& bcs, int bcscomp,
                         const PreInterpHook& pre_interp = {},
                         const PostInterpHook& post_interp = {});
-
+    //****************************************************************************
+    
+    //---------------------   MY VERSION WITH VEC -----------------------------------------------
+    template <typename MF, typename BC, typename Interp,
+              typename PreInterpHook=NullInterpHook<typename MF::FABType::value_type>,
+              typename PostInterpHook=NullInterpHook<typename MF::FABType::value_type> >
+    std::enable_if_t<IsFabArray<MF>::value>
+    FillPatchTwoLevels (amrex::Vector<MF*>& vec_mf, amrex::Vector<Real>& vec_time,
+                        const amrex::Vector<amrex::Vector<MF*>>& vec_vec_cmf, 
+                        const Vector<Vector<Real>>& vec_vec_ct,
+                        const amrex::Vector<amrex::Vector<MF*>>& vec_vec_fmf,
+                        const Vector<Vector<Real>>& vec_vec_ft,
+                        amrex::Vector<int>& vec_scomp, amrex::Vector<int>& vec_dcomp, 
+                        amrex::Vector<int>& vec_ncomp,
+                        const amrex::Vector<Geometry>& vec_cgeom,
+                        const amrex::Vector<Geometry>& vec_fgeom,
+                        amrex::Vector<BC>& vec_cbc, amrex::Vector<int>& vec_cbccomp,
+                        amrex::Vector<BC>& vec_fbc, amrex::Vector<int>& vec_fbccomp,
+                        const amrex::Vector<IntVect>& vec_ratio,
+                        amrex::Vector<Interp*>& vec_mapper,                           
+                        const amrex::Vector<amrex::Vector<BCRec>>& vec_vec_bcs,
+                        amrex::Vector<int>& vec_bcscomp,
+                        const amrex::Vector<PreInterpHook>& vec_pre_interp = {{}},
+                        const amrex::Vector<PostInterpHook>& vec_post_interp = {{}});
+    //------------------------------------------------------------------------------------------------
+    
     template <typename MF, typename BC, typename Interp,
               typename PreInterpHook=NullInterpHook<typename MF::FABType::value_type>,
               typename PostInterpHook=NullInterpHook<typename MF::FABType::value_type> >
